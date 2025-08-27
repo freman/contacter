@@ -21,6 +21,7 @@ func main() {
 	configDir := flag.String("config", "config", "directory containing configuration files")
 	templatesDir := flag.String("templates", "templates", "directory containing templates")
 	staticDir := flag.String("static", "static", "directory containing static files")
+	listen := flag.String("listen", "127.0.0.1:8080", "listen on this address")
 	flag.Parse()
 
 	var err error
@@ -67,7 +68,7 @@ func main() {
 	app.echo.GET("/contact/*", app.handleStatic)
 
 	// Start server
-	app.echo.Logger.Fatal(app.echo.Start(":8080"))
+	app.echo.Logger.Fatal(app.echo.Start(*listen))
 }
 
 func (c *Contacter) IPExtractor(req *http.Request) string {
