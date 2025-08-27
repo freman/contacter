@@ -1,0 +1,23 @@
+{
+  "upstream": {
+    "whitelist": [
+        "10.0.0.0/8"
+    ],
+    "method": "x-forwarded-for"
+  },
+  "smtp": {
+    "host": "20.0.0.2",
+    "port": 25,
+    "recipient": "siteowner@example.com"
+  },
+  "smtptest": {
+    "enabled": true,
+    "helo": "example.com",
+    "from": "smtp-user-check@example.com"
+  },
+  "abuseipdb": {
+    "enabled": true,
+    "api_key": "your key goes here",
+    "cache_file": "cache.json"
+  }
+}
