@@ -1,0 +1,21 @@
+services:
+  contacter:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./config:/config:ro
+      - ./templates:/templates:ro
+      - ./static:/static:ro
+      # Uncomment if using abuseipdb.cache_file - needs a writable location
+      # - ./data:/data
+    command:
+      - -config
+      - /config
+      - -templates
+      - /templates
+      - -static
+      - /static
+      - -listen
+      - 0.0.0.0:8080

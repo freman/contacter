@@ -19,5 +19,29 @@
     "enabled": true,
     "api_key": "your key goes here",
     "cache_file": "cache.json"
-  }
+  },
+  "cors": {
+    "origins": ["https://example.com"]
+  },
+  "rate_limit": {
+    "rate": 0.00333,
+    "burst": 1,
+    "expires_in": 1800
+  },
+  "spam_protection": [
+    {
+      "field": "yourwebsite",
+      "type": "honeypot"
+    },
+    {
+      "field": "javascript",
+      "type": "setvalue",
+      "value": "42"
+    },
+    {
+      "field": "cryptographicsecretsaregreat",
+      "type": "token",
+      "value": "replace-with-a-long-random-secret"
+    }
+  ]
 }

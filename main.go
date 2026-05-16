@@ -2,13 +2,14 @@ package main
 
 import (
 	"flag"
+	"log/slog"
 	"net/http"
+	"os"
+	"slices"
 	"strings"
-	"time"
 
-	"github.com/labstack/echo/v4"
-	"github.com/labstack/echo/v4/middleware"
-	"golang.org/x/time/rate"
+	"github.com/labstack/echo/v5"
+	"github.com/labstack/echo/v5/middleware"
 )
 
 type Contacter struct {
@@ -34,47 +35,54 @@ func main() {
 
 	app.echo.Renderer, err = NewTemplateRegistry(*templatesDir)
 	if err != nil {
-		app.echo.Logger.Fatalf("failed to initialize template registry: %v", err)
+		slog.Error("failed to initialize template registry", "err", err)
+		os.Exit(1)
 	}
 
 	app.echo.IPExtractor = app.IPExtractor
 
-	// Rate limiter middleware for POST requests (1 per minute per IP)
-	rateLimiter := middleware.RateLimiterWithConfig(middleware.RateLimiterConfig{
-		Skipper: middleware.DefaultSkipper,
-		Store: middleware.NewRateLimiterMemoryStoreWithConfig(
-			middleware.RateLimiterMemoryStoreConfig{
-				Rate:      rate.Every(5 * time.Minute), // 1 token every 5 minutes
-				Burst:     1,                           // max 1 request at a time
-				ExpiresIn: 30 * time.Minute,            // how long visitor entry stays around
-			},
-		),
-		IdentifierExtractor: func(ctx echo.Context) (string, error) {
-			return ctx.RealIP(), nil
-		},
-		ErrorHandler: func(context echo.Context, err error) error {
-			return context.Render(http.StatusTooManyRequests, context.Request().Host, TemplateData{Error: "Too many requests, please try again later"})
-		},
-		DenyHandler: func(context echo.Context, identifier string, err error) error {
-			return context.Render(http.StatusTooManyRequests, context.Request().Host, TemplateData{Error: "Too many requests, please try again later"})
-		},
-	})
+	app.echo.Use(middleware.BodyLimit(200 * 1024))
+	app.echo.Use(middleware.CORSWithConfig(middleware.CORSConfig{
+		UnsafeAllowOriginFunc: func(c *echo.Context, origin string) (string, bool, error) {
+			cfg, err := app.configCache.Get(c.Request().Host)
+			if err != nil {
+				return "", false, nil
+			}
 
-	// Route for contact form
+			if slices.Contains(cfg.CORS.Origins, "*") {
+				slog.Warn("wildcard CORS origin rejected - list specific origins", "host", c.Request().Host)
+
+				return "", false, nil
+			}
+
+			if !slices.Contains(cfg.CORS.Origins, origin) {
+				return "", false, nil
+			}
+
+			return origin, true, nil
+		},
+		AllowMethods: []string{"GET", "POST", "OPTIONS"},
+		AllowHeaders: []string{"Content-Type", "X-Requested-With"},
+		MaxAge:       86400,
+	}))
+
+	domainRL := NewDomainRateLimiter(app.configCache)
+
 	app.echo.GET("/contact", app.handleContact)
-	app.echo.POST("/contact", app.handleContact, rateLimiter)
-
-	// Route for static files (css, js, images)
+	app.echo.POST("/contact", app.handleContact, domainRL.Middleware())
 	app.echo.GET("/contact/*", app.handleStatic)
 
-	// Start server
-	app.echo.Logger.Fatal(app.echo.Start(*listen))
+	if err := app.echo.Start(*listen); err != nil {
+		slog.Error("server error", "err", err)
+		os.Exit(1)
+	}
 }
 
 func (c *Contacter) IPExtractor(req *http.Request) string {
 	cfg, err := c.configCache.Get(req.Host)
 	if err != nil {
-		c.echo.Logger.Errorf("IPExtractor Configuration Failed, using DirectIP: %v", err)
+		slog.Error("IPExtractor configuration failed, using direct IP", "err", err)
+
 		return echo.ExtractIPDirect()(req)
 	}
 
@@ -84,7 +92,7 @@ func (c *Contacter) IPExtractor(req *http.Request) string {
 	case "x-forwarded-for":
 		return echo.ExtractIPFromXFFHeader(networksToTrustOptions(cfg.Upstream.Whitelist...)...)(req)
 	case "x-real-ip":
-		return echo.ExtractIPFromXFFHeader(networksToTrustOptions(cfg.Upstream.Whitelist...)...)(req)
+		return echo.ExtractIPFromRealIPHeader(networksToTrustOptions(cfg.Upstream.Whitelist...)...)(req)
 	}
 
 	return echo.ExtractIPDirect()(req)

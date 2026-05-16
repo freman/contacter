@@ -2,8 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"sync"
 	"time"
@@ -15,95 +18,98 @@ type AbuseIPDBResponse struct {
 	} `json:"data"`
 }
 
-// CacheEntry stores an AbuseIPDB result with a timestamp
 type CacheEntry struct {
 	Score     int       `json:"score"`
 	Timestamp time.Time `json:"timestamp"`
 }
 
-// Cache stores IP results with thread-safe access
 type Cache struct {
 	Entries map[string]CacheEntry `json:"entries"`
 	mu      sync.RWMutex
 }
 
-func checkAbuseIPDB(ip string) error {
-	const apiKey = "secrets"
-	const cacheFile = "cache.json"
-	var cache Cache
+var (
+	abuseIPCache     = Cache{Entries: make(map[string]CacheEntry)}
+	abuseLoadOnce    sync.Once
+	abuseIPDBBaseURL = "https://api.abuseipdb.com"
+	abuseIPDBClient  = &http.Client{Timeout: 10 * time.Second}
+	errAbuseService  = errors.New("service temporarily unavailable")
+)
 
-	// Load cache (lazy initialization)
-	cache.mu.Lock()
-	if _, err := os.Stat(cacheFile); err == nil {
+func initAbuseIPCache(cacheFile string) {
+	abuseLoadOnce.Do(func() {
 		data, err := os.ReadFile(cacheFile)
 		if err != nil {
-			cache.mu.Unlock()
-			fmt.Printf("Failed to read cache file: %v\n", err)
-		} else {
-			if err := json.Unmarshal(data, &cache); err != nil {
-				cache.mu.Unlock()
-				fmt.Printf("Failed to unmarshal cache: %v\n", err)
-			} else {
-				if cache.Entries == nil {
-					cache.Entries = make(map[string]CacheEntry)
-				}
+			if !os.IsNotExist(err) {
+				slog.Warn("failed to read abuse cache", "file", cacheFile, "err", err)
 			}
-		}
-	} else {
-		cache.Entries = make(map[string]CacheEntry)
-	}
-	cache.mu.Unlock()
 
-	// Check cache
-	cache.mu.RLock()
-	entry, exists := cache.Entries[ip]
-	if exists && time.Since(entry.Timestamp) <= 24*time.Hour {
-		cache.mu.RUnlock()
-		if entry.Score > 50 {
-			return fmt.Errorf("IP %s blocked due to high abuse confidence score: %d", ip, entry.Score)
+			return
 		}
+
+		abuseIPCache.mu.Lock()
+		defer abuseIPCache.mu.Unlock()
+
+		if err := json.Unmarshal(data, &abuseIPCache); err != nil {
+			slog.Warn("failed to parse abuse cache", "file", cacheFile, "err", err)
+			abuseIPCache.Entries = make(map[string]CacheEntry)
+		}
+	})
+}
+
+func checkAbuseIPDB(ip string, config AbuseIPDBConfig) error {
+	initAbuseIPCache(config.CacheFile)
+
+	abuseIPCache.mu.RLock()
+	entry, exists := abuseIPCache.Entries[ip]
+	abuseIPCache.mu.RUnlock()
+
+	if exists && time.Since(entry.Timestamp) <= 24*time.Hour {
+		if entry.Score > 50 {
+			return fmt.Errorf("IP %s blocked (abuse score: %d)", ip, entry.Score)
+		}
+
 		return nil
 	}
-	cache.mu.RUnlock()
 
-	// Query AbuseIPDB
-	url := fmt.Sprintf("https://api.abuseipdb.com/api/v2/check?ipAddress=%s&maxAgeInDays=90", ip)
-	req, _ := http.NewRequest("GET", url, nil)
-	req.Header.Set("Key", apiKey)
+	params := url.Values{"ipAddress": {ip}, "maxAgeInDays": {"90"}}
+	req, err := http.NewRequest(http.MethodGet, abuseIPDBBaseURL+"/api/v2/check?"+params.Encode(), nil)
+	if err != nil {
+		return fmt.Errorf("AbuseIPDB request creation failed: %w", err)
+	}
+
+	req.Header.Set("Key", config.APIKey)
 	req.Header.Set("Accept", "application/json")
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	resp, err := abuseIPDBClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("AbuseIPDB request failed: %v", err)
+		return fmt.Errorf("AbuseIPDB request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("%w: AbuseIPDB returned %d", errAbuseService, resp.StatusCode)
+	}
+
 	var result AbuseIPDBResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return fmt.Errorf("AbuseIPDB decode failed: %v", err)
+		return fmt.Errorf("AbuseIPDB decode failed: %w", err)
 	}
 
-	// Update cache
-	cache.mu.Lock()
-	cache.Entries[ip] = CacheEntry{
-		Score:     result.Data.AbuseConfidenceScore,
-		Timestamp: time.Now(),
+	abuseIPCache.mu.Lock()
+	abuseIPCache.Entries[ip] = CacheEntry{Score: result.Data.AbuseConfidenceScore, Timestamp: time.Now()}
+	data, merr := json.MarshalIndent(&abuseIPCache, "", "  ")
+	abuseIPCache.mu.Unlock()
+
+	if merr != nil {
+		slog.Warn("failed to marshal abuse cache", "err", merr)
+	} else if err := os.WriteFile(config.CacheFile, data, 0644); err != nil {
+		slog.Warn("failed to write abuse cache", "file", config.CacheFile, "err", err)
 	}
-	data, err := json.MarshalIndent(&cache, "", "  ")
-	if err != nil {
-		cache.mu.Unlock()
-		fmt.Printf("Failed to marshal cache: %v\n", err)
-	} else {
-		if err := os.WriteFile(cacheFile, data, 0644); err != nil {
-			cache.mu.Unlock()
-			fmt.Printf("Failed to write cache file: %v\n", err)
-		}
-	}
-	cache.mu.Unlock()
 
 	if result.Data.AbuseConfidenceScore > 50 {
-		return fmt.Errorf("IP %s blocked due to high abuse confidence score: %d", ip, result.Data.AbuseConfidenceScore)
+		return fmt.Errorf("IP %s blocked (abuse score: %d)", ip, result.Data.AbuseConfidenceScore)
 	}
+
 	return nil
 }
