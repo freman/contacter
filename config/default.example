@@ -15,10 +15,12 @@
     "helo": "example.com",
     "from": "smtp-user-check@example.com"
   },
+  "cache": {
+    "file": "cache.json"
+  },
   "abuseipdb": {
     "enabled": true,
-    "api_key": "your key goes here",
-    "cache_file": "cache.json"
+    "api_key": "your key goes here"
   },
   "cors": {
     "origins": ["https://example.com"]

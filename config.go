@@ -39,9 +39,12 @@ type SMTPTestConfig struct {
 }
 
 type AbuseIPDBConfig struct {
-	Enabled   bool   `json:"enabled"`
-	APIKey    string `json:"api_key"`
-	CacheFile string `json:"cache_file"`
+	Enabled bool   `json:"enabled"`
+	APIKey  string `json:"api_key"`
+}
+
+type CacheConfig struct {
+	File string `json:"file"`
 }
 
 type CORSSettings struct {
@@ -65,12 +68,13 @@ type SpamFilterConfig struct {
 }
 
 type Config struct {
-	Upstream       UpstreamConfig    `json:"upstream"`
-	SMTP           SMTPConfig        `json:"smtp"`
-	SMTPTest       SMTPTestConfig    `json:"smtptest"`
-	AbuseIPDB      AbuseIPDBConfig   `json:"abuseipdb"`
-	CORS           CORSSettings      `json:"cors"`
-	RateLimit      RateLimitConfig   `json:"rate_limit"`
+	Upstream       UpstreamConfig     `json:"upstream"`
+	SMTP           SMTPConfig         `json:"smtp"`
+	SMTPTest       SMTPTestConfig     `json:"smtptest"`
+	AbuseIPDB      AbuseIPDBConfig    `json:"abuseipdb"`
+	Cache          CacheConfig        `json:"cache"`
+	CORS           CORSSettings       `json:"cors"`
+	RateLimit      RateLimitConfig    `json:"rate_limit"`
 	SpamProtection []SpamFilterConfig `json:"spam_protection"`
 }
 

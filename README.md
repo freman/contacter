@@ -8,14 +8,20 @@ It was originally built because I needed a reliable way for Google to index a co
 - Multi-domain support
   Serve different templates per domain, or fall back to a common template for all.
 
+- Spam protection
+  Honeypot fields, JavaScript setvalue checks, and HMAC-signed single-use tokens - configure any combination.
+
+- IP reputation cache
+  Tracks seen IPs with score and source. Spam-triggered blocks are recorded locally so bots can't retry. Optionally backed by AbuseIPDB for external reputation data.
+
 - Per-domain and global rate limiting
   Per-client rate limiting, configurable per domain or globally via `global.conf`.
 
-- AbuseIPDB integration
-  Checks inbound IP addresses against https://www.abuseipdb.com/ to detect and block known bad actors.
+- SMTP with TLS support
+  Plain SMTP, STARTTLS, and implicit TLS. Authenticated SMTP for relay setups. Email addresses are validated before connecting.
 
 - SMTP sender verification
-  Optionally probes the sender's mail server to verify that the account exists before sending.
+  Optionally probes the sender's mail server to verify the account exists before sending.
 
 - XHR / fetch support
   Can respond with JSON instead of HTML, so you can embed a contact form on a separate site and POST to Contacter via JavaScript.
@@ -48,39 +54,153 @@ Save as `config/example.com.conf`:
         "method": "x-forwarded-for"
       },
       "smtp": {
-        "host": "20.0.0.2",
-        "port": 25,
-        "recipient": "siteowner@example.com"
+        "host": "mail.example.com",
+        "port": 587,
+        "recipient": "siteowner@example.com",
+        "starttls": true
       },
       "smtptest": {
         "enabled": true,
         "helo": "example.com",
         "from": "smtp-user-check@example.com"
       },
+      "cache": {
+        "file": "cache.json"
+      },
       "abuseipdb": {
         "enabled": true,
-        "api_key": "your key goes here",
-        "cache_file": "cache.json"
+        "api_key": "your key goes here"
       },
       "cors": {
         "origins": ["https://example.com"]
+      },
+      "spam_protection": [
+        { "field": "yourwebsite",  "type": "honeypot" },
+        { "field": "javascript",   "type": "setvalue", "value": "42" },
+        { "field": "auth",         "type": "token",    "value": "replace-with-a-long-random-secret" }
+      ]
+    }
+
+---
+
+## Spam Protection
+
+Three mechanisms are available under `spam_protection`. Configure any combination; unused types are not checked.
+
+### Honeypot
+
+A field name that should always be empty. Real users never see it (hidden via CSS in your template). Bots that populate every field trip it.
+
+    { "field": "yourwebsite", "type": "honeypot" }
+
+### Setvalue
+
+A hidden field whose value is set by a JavaScript snippet at page load. The server checks for the expected value; anything that skipped JavaScript fails.
+
+    { "field": "javascript", "type": "setvalue", "value": "42" }
+
+### Token
+
+On page load, the form fetches a short-lived HMAC-signed token from the API endpoint via a GET request. The token is valid for ten minutes and is single-use - replays are rejected. Expired tokens return an error with the form data available for prefilling.
+
+    { "field": "auth", "type": "token", "value": "replace-with-a-long-random-secret" }
+
+The GET endpoint returns:
+
+    { "token": "<signed-value>" }
+
+Expired or replayed tokens return:
+
+    { "error": "Your session expired - please try again" }
+
+---
+
+## IP Reputation Cache
+
+Contacter maintains a local JSON cache of IP reputation scores. It is consulted at the start of every request; IPs with a score above 50 recorded within the last 24 hours are blocked immediately.
+
+    {
+      "cache": {
+        "file": "cache.json"
       }
     }
 
-### upstream.method
+Any IP that trips a spam filter is written into the cache with score 100 and the source set to the filter type that caught it (`honeypot`, `setvalue`, or `token`). This blocks that IP on every subsequent request for 24 hours without needing to re-check the spam filters or call any external API.
+
+The cache file is human-readable JSON:
+
+    {
+      "entries": {
+        "1.2.3.4": {
+          "score": 100,
+          "source": "honeypot",
+          "timestamp": "2026-05-17T10:00:00Z"
+        }
+      }
+    }
+
+The cache is independent of AbuseIPDB. Configure it without AbuseIPDB to get local-only blocking, or with AbuseIPDB to combine local and external reputation data.
+
+---
+
+## AbuseIPDB
+
+    {
+      "abuseipdb": {
+        "enabled": true,
+        "api_key": "your key goes here"
+      }
+    }
+
+When enabled, Contacter checks the sender's IP against https://www.abuseipdb.com/ before processing. High-confidence scores (above 50) block the request. Results are written into the shared IP reputation cache, so repeat submissions from the same IP don't generate additional API calls. If the API is unreachable, the check fails open.
+
+Requires `cache.file` to be set.
+
+---
+
+## SMTP
+
+    {
+      "smtp": {
+        "host": "mail.example.com",
+        "port": 587,
+        "recipient": "you@example.com",
+        "username": "smtp-user",
+        "password": "smtp-password",
+        "starttls": true
+      }
+    }
+
+- `starttls: true` - upgrades the connection via STARTTLS (typically port 587)
+- `tls: true` - implicit TLS from the start (typically port 465)
+- Omit both for plain SMTP
+- `username` and `password` enable SMTP AUTH for relay setups
+
+Email addresses are validated against RFC 5322 before a connection is opened.
+
+---
+
+## upstream.method
+
 Controls how Contacter extracts the client IP:
 
 - `direct` - use the TCP connection source address
 - `x-forwarded-for` - use the X-Forwarded-For header
 - `x-real-ip` - use the X-Real-IP header
 
-### cors.origins
+---
+
+## cors.origins
+
 A list of origins allowed to POST to this domain's endpoint via XHR or fetch.
 If empty or omitted, cross-origin requests are rejected by the browser.
 
 Only list origins you actually control. Do not use `*`.
 
-### rate_limit
+---
+
+## rate_limit
+
 Controls how aggressively Contacter limits POST requests from a single IP to this domain.
 All fields are optional - omitting the block or leaving values at zero uses the defaults.
 
@@ -125,6 +245,13 @@ The file is watched for changes and reloaded automatically.
 If you want to host the form on your own site and POST to Contacter rather than linking out to it, set `cors.origins` in the config and use `fetch` with `Accept: application/json`:
 
     const form = document.getElementById('contact-form');
+
+    // Fetch a token on page load if using token spam protection
+    const tokenRes = await fetch('https://contact.example.com/contact', {
+      headers: { 'Accept': 'application/json' },
+    });
+    const { token } = await tokenRes.json();
+    document.querySelector('[name="auth"]').value = token;
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -175,14 +302,6 @@ The lookup order works like this:
    - If not, static files fall back to `static/default/`.
 
 In short: Contacter always tries to find a domain-specific config, template, or static directory first - and falls back to `default` if none is found.
-
----
-
-## Roadmap / Ideas
-
-- Support for external rate limiter backends (Redis, Memcached)
-- Webhook integration for alternative notification channels (Slack, Discord, etc.)
-- Extended template variables (geoIP, reputation score, etc.)
 
 ---
 
