@@ -43,7 +43,7 @@ type AbuseIPDBConfig struct {
 	APIKey  string `json:"api_key"`
 }
 
-type CacheConfig struct {
+type IPCacheConfig struct {
 	File string `json:"file"`
 }
 
@@ -72,7 +72,7 @@ type Config struct {
 	SMTP           SMTPConfig         `json:"smtp"`
 	SMTPTest       SMTPTestConfig     `json:"smtptest"`
 	AbuseIPDB      AbuseIPDBConfig    `json:"abuseipdb"`
-	Cache          CacheConfig        `json:"cache"`
+	IPCache        IPCacheConfig      `json:"ip_cache"`
 	CORS           CORSSettings       `json:"cors"`
 	RateLimit      RateLimitConfig    `json:"rate_limit"`
 	SpamProtection []SpamFilterConfig `json:"spam_protection"`

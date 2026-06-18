@@ -15,7 +15,7 @@
     "helo": "example.com",
     "from": "smtp-user-check@example.com"
   },
-  "cache": {
+  "ip_cache": {
     "file": "cache.json"
   },
   "abuseipdb": {

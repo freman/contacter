@@ -64,7 +64,7 @@ Save as `config/example.com.conf`:
         "helo": "example.com",
         "from": "smtp-user-check@example.com"
       },
-      "cache": {
+      "ip_cache": {
         "file": "cache.json"
       },
       "abuseipdb": {
@@ -120,7 +120,7 @@ Expired or replayed tokens return:
 Contacter maintains a local JSON cache of IP reputation scores. It is consulted at the start of every request; IPs with a score above 50 recorded within the last 24 hours are blocked immediately.
 
     {
-      "cache": {
+      "ip_cache": {
         "file": "cache.json"
       }
     }

@@ -71,14 +71,14 @@ func (c Contacter) handleContact(ec *echo.Context) error {
 
 	clientIP := ec.RealIP()
 
-	if config.Cache.File != "" {
-		if err := checkIPCache(clientIP, config.Cache.File); err != nil {
+	if config.IPCache.File != "" {
+		if err := checkIPCache(clientIP, config.IPCache.File); err != nil {
 			return respond(ec, domain, http.StatusOK, TemplateData{Error: "Access denied"})
 		}
 	}
 
 	if config.AbuseIPDB.Enabled {
-		if err := checkAbuseIPDB(clientIP, config.AbuseIPDB, config.Cache.File); err != nil {
+		if err := checkAbuseIPDB(clientIP, config.AbuseIPDB, config.IPCache.File); err != nil {
 			msg := "Access denied"
 			if errors.Is(err, errAbuseService) {
 				msg = "Unable to verify request, please try again later"
@@ -137,8 +137,8 @@ func (c Contacter) handleContact(ec *echo.Context) error {
 
 			slog.Info("spam filter rejected submission", "type", sc.Type, "field", sc.Field, "ip", clientIP, "err", err)
 
-			if config.Cache.File != "" {
-				recordIP(clientIP, sc.Type, 100, config.Cache.File)
+			if config.IPCache.File != "" {
+				recordIP(clientIP, sc.Type, 100, config.IPCache.File)
 			}
 
 			return respond(ec, domain, http.StatusBadRequest, TemplateData{Error: "Submission rejected"})
